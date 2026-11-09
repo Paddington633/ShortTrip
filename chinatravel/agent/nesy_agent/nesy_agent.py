@@ -79,6 +79,7 @@ class NesyAgent(BaseAgent):
 
     def translate_nl2sl(self, query, load_cache=False):
 
+        source_query=deepcopy(query)
         llm_method = "translation_{}_reflect".format(self.backbone_llm.name)
         if not os.path.exists(os.path.join(self.cache_dir, llm_method)):
             os.makedirs(os.path.join(self.cache_dir, llm_method))
@@ -99,8 +100,21 @@ class NesyAgent(BaseAgent):
                 query = nl2sl_reflect_en(query, self.backbone_llm)
             else:
                 query = nl2sl_reflect(query, self.backbone_llm, lang=self.lang)
-            if "error" in query:
-                query["hard_logic_py"] = []
+        from .translation_contract import TranslationValidationError
+        from .constraint_compiler import validate_extraction
+        for key in ('uid','days','people_number','start_city','target_city'):
+            if key in source_query and query.get(key)!=source_query[key]:
+                raise TranslationValidationError('Translation/cache changed input field: '+key)
+        query=validate_extraction(source_query,query)
+        if self.lang == 'en':
+            from .nl2sl_hybrid_en import check as check_translation
+        else:
+            from .nl2sl_hybrid import check as check_translation
+        errors, _ = check_translation(query)
+        if 'error' in query or errors:
+            raise TranslationValidationError(
+                'Translation rejected before DFS: '+str(errors or query['error']))
+        if not load_cache or not os.path.exists(file_path):
             save_json_file(query, file_path)
 
         return query
@@ -186,7 +200,41 @@ class NesyAgent(BaseAgent):
         plan_out["all_constraints_pass"] = self.all_constraints_pass
         return succ, plan_out
 
+    def record_prune(self, rejected):
+        """Bounded examples plus exact counters, without flooding search logs."""
+        rule = rejected['rule']
+        if not hasattr(self, 'prune_counts'):
+            self.prune_counts, self.prune_examples = {}, {}
+        self.prune_counts[rule] = self.prune_counts.get(rule, 0) + 1
+        examples = self.prune_examples.setdefault(rule, [])
+        if len(examples) < 3:
+            examples.append(deepcopy(rejected))
+            print('PRUNE ' + json.dumps(rejected, ensure_ascii=False), flush=True)
+
+    def prune_partial(self, query, plan, poi_plan):
+        from .pruning import prefix_reason
+        rejected = prefix_reason(query, plan, poi_plan, getattr(self, 'required_rooms', None))
+        if rejected:
+            self.record_prune(rejected)
+            return True
+        return False
+
+    def filter_intercity(self, indices, info, query, go=None):
+        from .pruning import selection_reason
+        kept = []
+        for idx in indices:
+            selected = {'go_transport': info.iloc[idx]} if go is None else {'go_transport': go, 'back_transport': info.iloc[idx]}
+            rejected = selection_reason(query, selected)
+            if rejected:
+                self.record_prune(rejected)
+            else:
+                kept.append(idx)
+        return kept
+
     def constraints_validation(self, query, plan, poi_plan):
+
+        if self.prune_partial(query, plan, poi_plan):
+            return False, plan
 
         self.constraints_validation_count += 1
 
@@ -470,98 +518,60 @@ class NesyAgent(BaseAgent):
 
         return tmp_plan
 
-    def check_if_too_late(
-        self, query, current_day, current_time, current_position, poi_plan
-    ):
-
-        if current_time != "" and time_compare_if_earlier_equal("23:00", current_time):
-            print("too late, after 23:00")
+    def check_if_too_late(self, query, current_day, current_time, current_position, poi_plan):
+        from .pruning import clock, reason
+        if current_time == '':
+            return False
+        now = clock(current_time)
+        if now is None:
+            return False
+        if now >= 1380:
+            self.record_prune(reason('day_cutoff', 'current time < 23:00', time=current_time))
             return True
-
-        if current_time != "" and current_day == query["days"] - 1:
-            # We should go back in time ...
-            transports_ranking = self.innercity_transports_ranking_from_query
-
-            for transport_type_sel in transports_ranking:
-
-                self.search_nodes += 1
-
-                flag = True
-                if "back_transport" in poi_plan:
-                    transports_sel = self.collect_innercity_transport(
-                        query["target_city"],
-                        current_position,
-                        poi_plan["back_transport"]["From"],
-                        current_time,
-                        transport_type_sel,
-                    )
-                    if not isinstance(transports_sel, list):
-                        self.backtrack_count += 1
-                        print("inner-city transport error, backtrack...")
-                        continue
-
-                    if len(transports_sel) > 0:
-                        arrived_time = transports_sel[-1]["end_time"]
-                    else:
-                        arrived_time = current_time
-
-                    if not time_compare_if_earlier_equal(
-                        poi_plan["back_transport"]["BeginTime"], arrived_time
-                    ):
-                        flag = False
-                if flag:
-                    print(
-                        "Can not go back source-city in time, current POI {}, station arrived time: {}".format(
-                            current_position, arrived_time
-                        )
-                    )
-                    return True
-
-        elif current_time != "":
-            if "accommodation" in poi_plan:
-                hotel_sel = poi_plan["accommodation"]
-                transports_ranking = self.innercity_transports_ranking_from_query
-
-                for transport_type_sel in transports_ranking:
-                    self.search_nodes += 1
-                    flag = True
-                    if "back_transport" in poi_plan:
-                        transports_sel = self.collect_innercity_transport(
-                            query["target_city"],
-                            current_position,
-                            hotel_sel["name"],
-                            current_time,
-                            transport_type_sel,
-                        )
-                        if not isinstance(transports_sel, list):
-                            self.backtrack_count += 1
-                            print("inner-city transport error, backtrack...")
-                            continue
-
-                        flag = True
-                        # print(transports_sel)
-                        # print(transports_sel[-1])
-
-                        if len(transports_sel) > 0:
-                            arrived_time = transports_sel[-1]["end_time"]
-                        else:
-                            arrived_time = current_time
-                        if not time_compare_if_earlier_equal("24:00", arrived_time):
-                            flag = False
-                    if flag:
-                        print(
-                            "Can not go back to hotel, current POI {}, hotel arrived time: {}".format(
-                                current_position, arrived_time
-                            )
-                        )
-                        return True
-
-        return False
+        if current_day == query['days'] - 1 and 'back_transport' in poi_plan:
+            destination = poi_plan['back_transport']['From']
+            deadline = clock(poi_plan['back_transport']['BeginTime'])
+            rule = 'return_access_infeasible'
+        elif current_day < query['days'] - 1 and 'accommodation' in poi_plan:
+            destination = poi_plan['accommodation']['name']
+            deadline = 1440
+            rule = 'hotel_access_infeasible'
+        else:
+            return False
+        if deadline is None:
+            return False
+        unknown = False
+        for mode in self.innercity_transports_ranking_from_query:
+            self.search_nodes += 1
+            try:
+                route = self.collect_innercity_transport(query['target_city'], current_position,
+                                                        destination, current_time, mode)
+                if not isinstance(route, list):
+                    continue
+                arrived = clock(route[-1]['end_time']) if route else now
+                if arrived is None:
+                    unknown = True
+                    continue
+                if arrived < now:
+                    arrived += 1440
+                if arrived <= deadline:
+                    return False
+            except (ValueError, KeyError, TypeError, IndexError):
+                unknown = True
+        if unknown:
+            return False
+        self.backtrack_count += 1
+        self.record_prune(reason(rule, 'all permitted routes miss deadline',
+                                 time=current_time, destination=destination, deadline=deadline))
+        return True
 
     def reranking_intercity_transport_go_with_constraints(
         self, ranking_go, go_info, query
     ):
 
+        ranking_go = self.filter_intercity(ranking_go, go_info, query)
+        if not ranking_go:
+            return []
         ### check constraints
         pass_num_list = np.zeros(len(go_info))
 
@@ -613,6 +623,9 @@ class NesyAgent(BaseAgent):
         self, ranking_back, back_info, query, go_sel
     ):
 
+        ranking_back = self.filter_intercity(ranking_back, back_info, query, go_sel)
+        if not ranking_back:
+            return []
         ### check constraints
         pass_num_list = np.zeros(len(back_info))
 
@@ -899,6 +912,8 @@ class NesyAgent(BaseAgent):
         self, query, poi_plan, plan, current_time, current_position, current_day=0
     ):
 
+        if self.prune_partial(query, plan, poi_plan):
+            return False, plan
         self.search_nodes += 1
         if (
             time.time() - self.time_before_search
@@ -914,22 +929,7 @@ class NesyAgent(BaseAgent):
             print("The current time is too late to go hotel or back-transport, backtrack...")
             return False, plan
 
-        if self.required_budget != None:
-            total_cost = 0
-            for day_activities in plan:
-                for activity in day_activities["activities"]:
-                    if activity["type"] in [
-                        "breakfast",
-                        "lunch",
-                        "dinner",
-                        "attraction",
-                    ]:
-                        total_cost += activity["cost"]
-
-            if total_cost + self.intercity_with_hotel_cost > self.required_budget:
-                self.backtrack_count += 1
-                print("budget exceeded, backtrack...")
-                return False, plan
+        # Budget pruning is handled by prune_partial using actual fares and reserved costs.
 
         # intercity_transport - go
         if current_day == 0 and current_time == "":
@@ -1531,6 +1531,8 @@ class NesyAgent(BaseAgent):
 
         self.time_before_search = time.time()
         self.llm_inference_time_count = 0
+        self.prune_counts, self.prune_examples = {}, {}
+        self.required_rooms = None
 
         # reset the cache before searching
         poi_plan = {}
@@ -1569,7 +1571,12 @@ class NesyAgent(BaseAgent):
             ranking_hotel, self.memory["accommodations"], query, query_room_number
         )
 
-        self.innercity_transports_ranking_from_query = self.ranking_innercity_transport_from_query(query)
+        from .pruning import local_ranking
+        proposed_modes = self.ranking_innercity_transport_from_query(query)
+        self.innercity_transports_ranking_from_query = local_ranking(query, proposed_modes)
+        if not self.innercity_transports_ranking_from_query:
+            self.record_prune(dict(rule='no_allowed_local_mode', constraint='transport_type', details={}))
+            return False, {'error_info': 'No permitted local transport mode.'}
 
         for go_i in ranking_go:
             go_info_i = go_info.iloc[go_i]
@@ -1631,15 +1638,8 @@ class NesyAgent(BaseAgent):
                         ] * required_rooms * (
                             query["days"] - 1
                         )
-                        if (
-                            self.required_budget != None
-                            and self.required_budget - self.intercity_with_hotel_cost
-                            <= self.query["people_number"]
-                            * (self.query["days"] - 1)
-                            * 100
-                        ):
+                        if self.prune_partial(query, [], poi_plan):
                             self.backtrack_count += 1
-                            print("required_budget - intercity_with_hotel_cost <= 100 * people_number * (days-1), backtrack...")
                             continue
 
                         print("search: ...")
@@ -1680,6 +1680,9 @@ class NesyAgent(BaseAgent):
                         poi_plan["go_transport"]["Cost"]
                         + poi_plan["back_transport"]["Cost"]
                     ) * query["people_number"]
+                    if self.prune_partial(query, [], poi_plan):
+                        self.backtrack_count += 1
+                        continue
                     print("search: ...")
                     try:
                         success, plan = self.dfs_poi(

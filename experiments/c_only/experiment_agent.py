@@ -63,6 +63,58 @@ class ExperimentAgent(SoftLLMDrivenAgent):
     def close_day_allowed(self,plan,poi_plan,current_day):
         return not self.missing_today(plan,poi_plan,current_day)
 
+    def meals_possible_after(self,plan,poi_plan,current_day,end_time,position):
+        """Necessary, optimistic meal witnesses after a complete attraction visit.
+
+        Waiting caps are not applied here: intervening activities can fill time
+        before a later meal. Actual meal scheduling and final audits still apply.
+        Unknown database/route information must not prove impossibility.
+        """
+        if self.group!='C':return True
+        now=current_day*1440+clock(end_time)
+        rows=getattr(self,'memory',{}).get('restaurants')
+        for obligation in self.missing_today(plan,poi_plan,current_day):
+            if not future_meal_possible(obligation,now):
+                self.record_prune(dict(rule='meal_after_attraction',constraint=obligation['kind'],details=dict(day=obligation['day'],end_time=end_time,position=position,cause='no remaining time slot')))
+                return False
+            if rows is None:continue
+            used=tuple(sorted(getattr(self,'restaurants_visiting',[])))
+            key=(self.query['target_city'],position,end_time,current_day,used,
+                 obligation['kind'],tuple(obligation['window']),
+                 tuple(map(tuple,obligation['free_intervals'])),
+                 tuple(self.innercity_transports_ranking_from_query))
+            cache=getattr(self,'_meal_feasibility_cache',{})
+            if key in cache:
+                if not cache[key]:
+                    self.record_prune(dict(rule='meal_after_attraction',constraint=obligation['kind'],details=dict(day=obligation['day'],end_time=end_time,position=position,cause='no restaurant/access witness')))
+                    return False
+                continue
+            possible=False;unknown=False
+            for index,row in rows.iterrows():
+                self._deadline_check()
+                if index in used:continue
+                for mode in self.innercity_transports_ranking_from_query:
+                    try:
+                        route=self.collect_innercity_transport(self.query['target_city'],position,row['name'],end_time,mode)
+                        if not isinstance(route,list):continue
+                        arrived=clock(route[-1]['end_time']) if route else clock(end_time)
+                        if arrived<clock(end_time):arrived+=1440
+                        start=max(now,current_day*1440+arrived,
+                                  current_day*1440+clock(row['opentime']),obligation['window'][0])
+                        finish=start+obligation['duration']
+                        if (finish<=current_day*1440+clock(row['endtime'])
+                                and meal_fits(obligation,start,finish)):
+                            possible=True;break
+                    except (ValueError,KeyError,TypeError,IndexError):
+                        unknown=True
+                if possible:break
+            cache[key]=possible or unknown
+            self._meal_feasibility_cache=cache
+            if not cache[key]:
+                self.record_prune(dict(rule='meal_after_attraction',constraint=obligation['kind'],details=dict(day=obligation['day'],end_time=end_time,position=position,cause='no restaurant/access witness')))
+                return False
+        return True
+
     def day_resume_time(self,plan,poi_plan,current_day,current_time):
         if current_time!='00:00' or current_day==0 or current_day>len(plan)-1:
             return current_time
@@ -96,6 +148,13 @@ class ExperimentAgent(SoftLLMDrivenAgent):
 
     def dfs_poi(self,query,poi_plan,plan,current_time,current_position,current_day=0):
         self._deadline_check()
+        if self.prune_partial(query, plan, poi_plan):return False,plan
+        if self.group=='C' and not plan and current_time=='':
+            from meal_pruning import preflight
+            rejected=preflight(self,query,poi_plan)
+            if rejected:
+                self.record_prune(rejected)
+                return False,plan
         if current_day>=query['days']:
             return False,plan
         while len(plan)<=current_day and current_time!='':
@@ -107,6 +166,7 @@ class ExperimentAgent(SoftLLMDrivenAgent):
             for o in self.missing_today(plan,poi_plan,current_day):
                 if not future_meal_possible(o,now):
                     self.rule_rejections+=1
+                    self.record_prune(dict(rule='meal_deadline',constraint=o['kind'],details=dict(day=o['day'],now=now)))
                     return False,plan
         # Preserve genuine hotel breakfast, but only when the previous night was
         # actually at this hotel and 08:00 fits the journey/traffic opportunity.
@@ -133,7 +193,7 @@ class ExperimentAgent(SoftLLMDrivenAgent):
             candidates_type[:]=[t for t in candidates_type if t not in {'hotel','back-intercity-transport'}]
         now=current_day*1440+clock(current_time)
         for o in sorted(missing,key=lambda o:o['window'][1]):
-            if o['kind'] in candidates_type and now>=o['window'][0]-30:
+            if self.group!='C' and o['kind'] in candidates_type and now>=o['window'][0]-30:
                 return o['kind'],candidates_type
         if not candidates_type:
             # A failed required meal branch cannot be bypassed by another activity.
@@ -147,7 +207,13 @@ class ExperimentAgent(SoftLLMDrivenAgent):
             import re,time
             from chinatravel.agent.nesy_agent import llm_driven_rec as rec
             before=time.time()
-            answer=self.backbone_llm([dict(role='user',content=rec.NEXT_POI_TYPE_INSTRUCTION.format(self.query['nature_language'],poi_plan,current_day+1,current_time,current_position,candidates_type))],one_line=False)
+            content=rec.NEXT_POI_TYPE_INSTRUCTION.format(self.query['nature_language'],poi_plan,current_day+1,current_time,current_position,candidates_type)
+            if self.group=='C':
+                content+='\n【当前C组实际规则，覆盖上文冲突规则】\n'
+                content+='三餐必须完成，但进入饭点不代表必须立即吃饭。早餐也是可搜索类型。\n'
+                content+='当前仍需用餐：'+str([o['kind'] for o in missing])+'；实际窗口和时长：'+str(WINDOWS)+'（分钟，自午夜起；窗口上界为开始截止）。\n'
+                content+='可比较先景点后吃饭、先吃饭后景点。后续代码会按完整参观、真实交通、餐厅营业和完整用餐时长检查是否来得及；不要仅因11点到来强制午餐，也不要假定13点截止。保留用餐所需时间；仍需用餐时不能直接结束当天或返程。\n'
+            answer=self.backbone_llm([dict(role='user',content=content)],one_line=False)
             self.llm_inference_time_count+=time.time()-before
             self.llm_rec_count+=1
             match=re.search(r'Type:\s*(\w+)',answer)
@@ -190,6 +256,7 @@ class ExperimentAgent(SoftLLMDrivenAgent):
         check=audit(dict(itinerary=plan),query['days'])
         if not check['all_pass']:
             self.rule_rejections+=1
+            self.record_prune(dict(rule='final_C_audit',constraint='meal/date/daytime',details=dict(violations=check['violations'][:5],date_pass=check['date_pass'],day_limit_pass=check['day_limit_pass'])))
             return False,plan
         return super().constraints_validation(query,plan,poi_plan)
 

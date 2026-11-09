@@ -19,22 +19,7 @@ def dfs_poi(
         print("The current time is too late to go hotel or back-transport, backtrack...")
         return False, plan
 
-    if self.required_budget != None:
-        total_cost = 0
-        for day_activities in plan:
-            for activity in day_activities["activities"]:
-                if activity["type"] in [
-                    "breakfast",
-                    "lunch",
-                    "dinner",
-                    "attraction",
-                ]:
-                    total_cost += activity["cost"]
-
-        if total_cost + self.intercity_with_hotel_cost > self.required_budget:
-            self.backtrack_count += 1
-            print("budget exceeded, backtrack...")
-            return False, plan
+    # Prefix budget lower bounds are checked by ExperimentAgent.dfs_poi.
 
     # intercity_transport - go
     if current_day == 0 and current_time == "":
@@ -443,6 +428,11 @@ def dfs_poi(
                             if actual_slot is None:
                                 continue
                             act_start_time, act_end_time = actual_slot
+
+                            if not self.meals_possible_after(plan,poi_plan,current_day,act_end_time,poi_sel['name']):
+                                self.backtrack_count += 1
+                                # Exact meal/cause counters are recorded by meals_possible_after.
+                                continue
 
                             plan[current_day]["activities"] = self.add_poi(
                                 activities=plan[current_day]["activities"],

@@ -88,4 +88,9 @@ def main():
             raise
     subprocess.run([sys.executable,'-B','-X','utf8',str(ROOT/'report.py')],cwd=manifest['project'],check=True)
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    import ctypes
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    if not kernel.SetThreadExecutionState(0x80000001):raise ctypes.WinError(ctypes.get_last_error())
+    try:main()
+    finally:kernel.SetThreadExecutionState(0x80000000)

@@ -84,7 +84,9 @@ class SoftLLMDrivenAgent(LLMDrivenAgent):
                           'duplicate_count': self.pool.duplicate_count,
                           'elapsed_seconds': time.monotonic() - self.soft_started,
                           'configuration': self.soft_config.__dict__,
-                          'wall_limit_seconds': self.wall_limit_seconds}
+                          'wall_limit_seconds': self.wall_limit_seconds,
+                          'prune_counts': getattr(self, 'prune_counts', {}),
+                          'prune_examples': getattr(self, 'prune_examples', {})}
         result = copy.deepcopy(winner['plan']) if winner else {}
         # Do not use super.run's least_plan_logic fallback as the selected itinerary.
         for name in ('search_nodes', 'backtrack_count', 'constraints_validation_count',

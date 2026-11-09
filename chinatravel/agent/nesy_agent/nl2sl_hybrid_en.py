@@ -1,4 +1,6 @@
 import os
+from .constraint_compiler import EXTRACTION_CONTRACT, validate_extraction, template_programs
+from .translation_contract import (TranslationValidationError, CODE_OUTPUT_INSTRUCTION, PROGRAM_EXAMPLES, code_list, check_constraint, output_options)
 import traceback
 from chinatravel.json_utils import repair_json
 
@@ -174,7 +176,7 @@ answer:
 "result=(day_count(plan)==2)",
 "result=(people_count(plan)==3)",
 "total_cost=0\nfor activity in allactivities(plan): total_cost+=activity_cost(activity)+innercity_transport_cost(activity_transports(activity))\nresult=(total_cost<=3000)",
-"result=True\nfor activity in allactivities(plan):\n  if activity_type(activity) in ['attraction', 'airplane', 'train'] and activity_tickets(activity)!=2: result=False\n  if innercity_transport_type(activity_transports(activity))=='metro' and metro_tickets(activity_transports(activity))!=2: result=False",
+"result=True\nfor activity in allactivities(plan):\n  if activity_type(activity) in ['attraction', 'airplane', 'train'] and activity_tickets(activity)!=3: result=False\n  if innercity_transport_type(activity_transports(activity))=='metro' and metro_tickets(activity_transports(activity))!=3: result=False",
 "result=True\nfor activity in allactivities(plan):\n  if innercity_transport_type(activity_transports(activity))=='taxi' and taxi_cars(activity_transports(activity))!=1: result=False",
 "result=True\nfor activity in allactivities(plan):\n  if activity_type(activity)=='accommodation' and room_count(activity)!=2: result=False\n  if activity_type(activity)=='accommodation' and room_type(activity)!=2: result=False\n  if activity_type(activity)=='accommodation' and accommodation_type(activity, target_city(plan))!='Smart Room Control': result=False\n  if activity_type(activity)=='accommodation' and activity_price(activity)>500: result=False",
 "restaurant_type_set = set()\nfor activity in allactivities(plan):\n  if activity_type(activity) in ['breakfast', 'lunch', 'dinner']:\n    restaurant_type_set.add(restaurant_type(activity, target_city(plan)))\nresult=({'Beijing cuisine'}<=restaurant_type_set)",
@@ -246,84 +248,71 @@ def get_first_list_in_str(json_str):
 
 def nl2sl_step1(query, backbone_llm):
 
-    nature_language = query["nature_language"]
-    messages = [{"role": "user", "content": NL2SL_INSTRUCTION.format(nature_language)}]
-    # print(messages[0]["content"])
-    query_ = backbone_llm(messages, one_line=False, json_mode=True)
+    from .extraction_alignment import extract_with_repair
+    return extract_with_repair(query,backbone_llm,NL2SL_INSTRUCTION.format(query['nature_language'])+EXTRACTION_CONTRACT)
 
-    try:
-        l_ptr = query_.find("{")
-        r_ptr = query_.rfind("}")
-        if l_ptr != -1 and r_ptr != -1:
-            query_ = query_[l_ptr : r_ptr + 1]
-
-        query_ = json.loads(query_)
-        for key in query_:
-            query[key] = query_[key]
-    except Exception as e:
-        query["hard_logic"] = []
-        return query
-
-
-    return query
 
 
 def nl2sl_step2(query, backbone_llm):
-    try:
-        query["hard_logic"] = [str(hl) for hl in query["hard_logic"]]
-        hard_logic = "\n".join(query["hard_logic"])
-    except Exception as e:
-        query["hard_logic"] = []
-        query["hard_logic_py"] = []
+    hard_logic=query.get('hard_logic')
+    if not isinstance(hard_logic,list) or not hard_logic or any(not isinstance(c,str) for c in hard_logic):
+        raise TranslationValidationError('Translation stage 2 requires nonempty hard_logic strings')
+    compiled=template_programs(query)
+    if all(code is not None for code in compiled):
+        query['hard_logic_py']=compiled
+        query['translation_program_sources']=['template']*len(compiled)
+        query.pop('translation_format_error',None)
         return query
-    messages = [
-        {
-            "role": "user",
-            "content": sl_trans_prompt
-            + hard_logic
-            + "\n The query is: \n"
-            + query["nature_language"]
-            + "\nanswer:\n",
-        }
-    ]
-    # print(messages[0]["content"])
-    hard_logic_py = backbone_llm(messages, one_line=False, json_mode=True)
-    # l_ptr = hard_logic_py.find("[")
-    # r_ptr = hard_logic_py.rfind("]")
-    # if l_ptr != -1 and r_ptr != -1:
-    #     hard_logic_py = hard_logic_py[l_ptr : r_ptr + 1]
-    hard_logic_py = get_first_list_in_str(hard_logic_py)
-    # print(hard_logic_py)
+    content='Translate symbolic requirements into validation programs using only these documented functions.\n'+func_docs+PROGRAM_EXAMPLES+CODE_OUTPUT_INSTRUCTION+'\nConstraints:\n'+'\n'.join(hard_logic)+'\nOriginal query:\n'+query['nature_language']+'\nanswer:\n'
+    response=backbone_llm([{'role':'user','content':content}],one_line=False,json_mode=True,**output_options(backbone_llm,len(hard_logic)))
+    return _store_programs(query,response)
+
+
+def _store_programs(query,response):
+    query['translation_raw_response']=response
     try:
-        query["hard_logic_py"] = json.loads(hard_logic_py)
-    except Exception as e:
-        query["error_hard_logic_py"] = hard_logic_py
-        query["hard_logic_py"] = []
-    query["hard_logic_py"] = [str(item) for item in query["hard_logic_py"]]
-    query["hard_logic_py"] = list(set(query["hard_logic_py"]))
+        programs=code_list(response)
+        templates=template_programs(query)
+        if len(programs)!=len(templates):
+            raise TranslationValidationError('Translation must return one program per original constraint')
+        query['hard_logic_py']=[fixed if fixed is not None else program for fixed,program in zip(templates,programs)]
+        for index,locked in query.get('validated_programs',{}).items():
+            query['hard_logic_py'][int(index)]=locked
+        query['translation_program_sources']=['template' if fixed is not None else 'model' for fixed in templates]
+        query.pop('translation_format_error',None)
+    except TranslationValidationError as exc:
+        query['hard_logic_py']=[]
+        query['translation_format_error']=str(exc)
     return query
+
 
 
 def check(query):
     run_error_list = []
     run_error_idx = []
-    hard_logic_py = query["hard_logic_py"]
+    hard_logic_py = query.get("hard_logic_py")
+    if not isinstance(hard_logic_py,list) or not hard_logic_py:
+        return [query.get('translation_format_error','Translation contains no constraint programs')], [-1]
+
+    if len(hard_logic_py) != len(query.get('hard_logic', [])):
+        return ['Translation must contain exactly one program per original constraint, in order; remove invented requirements and restore missing ones'], [-1]
 
     if query["days"] not in EXAMPLE_PLANS:
         print("Error: days should be in [1, 2, 3, 4, 5, 6]")
-        return [], []
+        return ['Translation cannot be checked for this day count'], [-1]
 
     example_plan = EXAMPLE_PLANS[query["days"]]
     for idx, constraint in enumerate(hard_logic_py):
         vars_dict = deepcopy(func_dict)
-        vars_dict["plan"] = example_plan
+        vars_dict["plan"] = deepcopy(example_plan)
         try:
-            execute_dsl_code(constraint, vars_dict, allowed_builtins={"set": set})
+            check_constraint(constraint, vars_dict)
         except Exception as e:
             if str(e) not in [
                 "Failed to create Point instance from string: unknown format.",
             ]:
-                run_error_list.append(str(e))
+                requirement=query['hard_logic'][idx]
+                run_error_list.append(f'Constraint {idx+1}: {requirement}\nProgram:\n{constraint}\n{type(e).__name__}: {e!r}\nUse documented function signatures; transport helpers take activity_transports(activity), a list, not a single leg.')
                 run_error_idx.append(idx)
     return run_error_list, run_error_idx
 
@@ -336,42 +325,29 @@ def reflect_info(query, checker: HardLogicPyChecker):
         return run_error_list, run_error_idx, [], []
     value_error_list = [checker.check(constraint)[0] for constraint in hard_logic_py]
     value_error_idx = [idx for idx, item in enumerate(value_error_list) if len(item)]
-    value_error_list = [item for sublist in value_error_list for item in sublist]
+    value_error_list = [
+        f"Constraint {idx+1}: {query['hard_logic'][idx]}\nProgram:\n{hard_logic_py[idx]}\nValue validation: {item}"
+        for idx,sublist in enumerate(value_error_list) for item in sublist
+    ]
     return run_error_list, run_error_idx, value_error_list, value_error_idx
 
 
 def reflect(query, backbone_llm, run_error_list, value_error_list):
 
-    content = (
-        reflect_prompt
-        + str(query["hard_logic_py"])
-        + "The error is: "
-        + "\n".join(run_error_list)
-        + "\n".join(value_error_list)
-        + "\nThe query is: \n"
-        + query["nature_language"]
-        + "\nanswer:\n"
-    )
-    # print(content)
+    content = ('Repair validation programs using only these documented functions.\n'
+        +func_docs+PROGRAM_EXAMPLES+CODE_OUTPUT_INSTRUCTION
+        +'\nOriginal requirements (one program each):\n'+json.dumps(query['hard_logic'],ensure_ascii=False)
+        +'\nCurrent programs:\n'+json.dumps(query['hard_logic_py'],ensure_ascii=False)
+        +'\nLocked validated programs (do not change):\n'+json.dumps(query.get('validated_programs',{}),ensure_ascii=False)
+        +'\nValidation errors:\n'+str(run_error_list+value_error_list)
+        +'\nOriginal user query:\n'+query['nature_language']+'\nanswer:\n')
     messages = [{"role": "user", "content": content}]
-    res = backbone_llm(messages, one_line=False, json_mode=True)
-    # l_ptr = res.find("[")
-    # r_ptr = res.rfind("]")
-    # if l_ptr != -1 and r_ptr != -1:
-    #     res = res[l_ptr : r_ptr + 1]
-    res = get_first_list_in_str(res)
-    # print(res)
-    try:
-        query["hard_logic_py"] = json.loads(res)
-    except Exception as e:
-        query["error_hard_logic_py"] = res
-        query["hard_logic_py"] = []
-    query["hard_logic_py"] = [str(item) for item in query["hard_logic_py"]]
-    # print(query["hard_logic_py"])
-    return query, len(run_error_list + value_error_list) == 0
+    res = backbone_llm(messages, one_line=False, json_mode=True, **output_options(backbone_llm,len(query['hard_logic'])))
+    return _store_programs(query,res), False
 
 
-def nl2sl_step3(query, backbone_llm, checker, max_trails=5):
+
+def nl2sl_step3(query, backbone_llm, checker, max_trails=3):
 
     cnt = 0
     query["reflect_info"] = []
@@ -393,8 +369,13 @@ def nl2sl_step3(query, backbone_llm, checker, max_trails=5):
         flag = len(run_error_list + value_error_list) == 0
         if flag:
             break
+        invalid=set(run_error_idx+value_error_idx)
+        if len(query['hard_logic_py'])==len(query['hard_logic']) and -1 not in invalid:
+            locked=query.setdefault('validated_programs',{})
+            for index,code in enumerate(query['hard_logic_py']):
+                if index not in invalid:locked[str(index)]=code
         query, _ = reflect(query, backbone_llm, run_error_list, value_error_list)
-        query["hard_logic_py"] = list(set(query["hard_logic_py"]))
+        # Preserve one-to-one constraint order, including identical programs.
 
         # if "OOD!!!" in query["hard_logic_py"]:
         #     run_error_list, run_error_idx, value_error_list, value_error_idx = (
@@ -421,19 +402,8 @@ def nl2sl_step3(query, backbone_llm, checker, max_trails=5):
             "hard_logic_py": query["hard_logic_py"],
         }
     )
-    error_indices = set(run_error_list + value_error_list)
-    query["hard_logic_py"] = [
-        val
-        for idx, val in enumerate(query["hard_logic_py"])
-        if idx not in error_indices
-    ]
-    # ood_idx = list(set(run_error_idx + value_error_idx))
-    # if len(ood_idx):
-    #     query["ood"] = True
-    #     for idx in ood_idx:
-    #         query["hard_logic_py_ood"].append(query["hard_logic_py"][idx])
-    #     for ood_logic in query["hard_logic_py_ood"]:
-    #         query["hard_logic_py"].remove(ood_logic)
+    if run_error_list or value_error_list:
+        raise TranslationValidationError('Translation failed after bounded repairs: '+str(run_error_list+value_error_list))
     return query
 
 
@@ -497,8 +467,11 @@ def nl2sl_reflect(query, backbone_llm):
         checker = HardLogicPyChecker(query["target_city"])
         query = nl2sl_step3(query, backbone_llm, checker)
         query["hard_logic_py_iter_3"] = query["hard_logic_py"]
+    except TranslationValidationError:
+        raise
     except Exception as e:
-        query["reflect_error"] = traceback.format_exc()
+        raise TranslationValidationError(
+            'Translation validation could not complete: '+str(e)) from e
     return query
 
 

@@ -1,9 +1,25 @@
-# 当前修改版完整架构
+# ShortTrip 当前架构
 
-保留ChinaTravel原有LLMNeSy、沙盒检索、符号搜索与评估，加入四类软评分、20候选选优、修改后的prompt，以及最新C组的三餐、跨日和景点08:00–21:00硬检查。详见ARCHITECTURE.md；原项目说明与许可保留。
+基于 ChinaTravel / LLMNeSy，包含自然语言约束翻译、数据库检索、DFS、硬约束提前剪枝、
+四类软约束评分和最多20个可行候选选优。
 
-本次发布仅包含源码、配置样例、测试和10个固定输入案例；不含密钥、日志、缓存、中断现场、候选行程或HTML/JSON实验结果。官方数据通过scripts/bootstrap_data.py下载，版本和校验信息固定在data_sources.json。
+当前版本加入灵活三餐顺序、原文依据与数据库名称对齐、确定性约束代码模板、有限次翻译修复、
+交通班次过滤、费用下界、三餐乐观预检，以及具体剪枝原因记录。
 
-从仓库根目录按README.md安装依赖、下载数据、配置.env.local，再运行experiments/c_only/prepare.py与driver.py。每例只跑一次，easy/human各5例；不会运行A/B/medium。每例最多30分钟、3路并行。prepare不调用模型，driver才开始付费请求。
+安装依赖并下载固定版本数据后，可运行 C 组的 easy、human 各五例。实验入口使用单独部署的
+本地 Qwen3.5-4B Q8 服务，地址为 `http://127.0.0.1:18080/v1`，模型别名为 `qwen3.5-4b-q8`。
+每例运行一次，串行执行，目标20候选，单例限时30分钟。
 
-当前仍存在已诊断的翻译和提前剪枝问题；上传的是现状完整架构，不代表这些问题已经修复。凌晨景点问题已增加搜索及最终审计两层硬检查。
+```sh
+python -m pip install -r requirements.txt
+python scripts/bootstrap_data.py --lang both
+python experiments/c_only/prepare.py
+python experiments/c_only/driver.py
+```
+
+`prepare.py` 生成运行配置和源码哈希，`driver.py` 开始模型请求。
+完整 HTML 输出到 `experiments/c_only/itineraries.html`。
+源码包含离线测试和固定输入案例。数据目录、模型权重、密钥、缓存及实验结果由 Git 忽略。
+
+架构、限制与测试说明见 `ARCHITECTURE.md`、`docs/pruning.md` 和 `VERIFICATION.md`。
+英文安装说明见 `README.md`，原项目说明与许可保留在 upstream README 和 `LICENSE`。

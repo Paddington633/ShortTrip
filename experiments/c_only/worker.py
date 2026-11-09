@@ -108,8 +108,6 @@ def evaluate(case, full_query, result):
 
 def run_case(case):
     os.chdir(PROJECT)  # Existing example-plan loader uses repository-relative paths.
-    from run import configure
-    from entrypoint import configured_factory
     from chinatravel.agent.llms import create_llm
     from chinatravel.environment.world_env import WorldEnv
     from chinatravel.soft_constraints.agent import SoftLLMDrivenAgent
@@ -128,21 +126,29 @@ def run_case(case):
     full_query = read(OUT / entry['query'])
     query = {k:v for k,v in full_query.items() if k not in ORACLE_FIELDS}
     assert not ORACLE_FIELDS & query.keys()
-    model = configure()
+    # Deliberately never load the cloud .env or cloud request factory.
+    model = CONFIG['model']
+    endpoint = CONFIG['base_url']
+    assert endpoint == 'http://127.0.0.1:18080/v1'
+    os.environ.update(CHINATRAVEL_OPENAI_BASE_URL=endpoint,
+        CHINATRAVEL_OPENAI_API_KEY='local-no-key', CHINATRAVEL_OPENAI_MODEL=model,
+        CHINATRAVEL_OPENAI_WIRE_API='chat', CHINATRAVEL_OPENAI_TOKEN_LIMIT_ARG='max_tokens',
+        CHINATRAVEL_OPENAI_RAISE_ERRORS='1', NO_PROXY='127.0.0.1,localhost')
     assert llm_driven_rec.NEXT_POI_TYPE_INSTRUCTION == prompts.NEXT_POI_TYPE_INSTRUCTION
     template = prompts.NEXT_POI_TYPE_INSTRUCTION
     assert 'hotel' in template and '13:00' in template and 'POI_type_list' in template
     template_sha = hashlib.sha256(template.encode('utf-8')).hexdigest()
     status_path = OUT / 'status' / f'{case}.json'
     status = {'group':entry['group'], 'base_case':entry['base_case'], 'repetition':entry['repetition'], 'case': case, 'split': entry['split'], 'uid': entry['uid'], 'model': model,
-              'state': 'running', 'pid': os.getpid(), 'started_at': datetime.now(timezone.utc).isoformat(),
+              'base_url': endpoint, 'state': 'running', 'pid': os.getpid(), 'started_at': datetime.now(timezone.utc).isoformat(),
               'candidate_target': 20, 'candidate_count': 0, 'translation_cache': 'fresh',
               'activity_template_sha256': template_sha, 'activity_prompt_requests': 0,
               'activity_prompt_responses': 0, 'oracle_in_planning': False,
               'request_settings': {'thinking': 'disabled', 'max_tokens': 4096}}
     save(status_path, status)
-    llm = configured_factory(create_llm)(model)
-    llm._client_kwargs.update(timeout=90, max_retries=3)
+    llm = create_llm(model, max_tokens=4096)
+    assert llm._client_kwargs['base_url'] == endpoint
+    llm._client_kwargs.update(timeout=600, max_retries=0)
     original_send = llm._send_request
     traces = OUT / 'traces'
     traces.mkdir(exist_ok=True)
@@ -153,6 +159,7 @@ def run_case(case):
 
     def send(messages, request_args):
         nonlocal api_count
+        assert str(llm.llm.base_url).rstrip('/') == endpoint
         api_count += 1
         text = '\n'.join(str(m.get('content','')) for m in messages)
         is_activity = text.lstrip().startswith(template.lstrip().split('{}',1)[0])
@@ -195,6 +202,33 @@ def run_case(case):
     agent = agent_type(**agent_options, env=WorldEnv(lang='zh'), backbone_llm=llm, cache_dir=str(cache),
                                log_dir=str(cache), debug=True, lang='zh',
                                candidate_limit=20, wall_limit_seconds=1750, on_candidate=checkpoint)
+    original_record_prune = agent.record_prune
+    def record_prune(rejected):
+        original_record_prune(rejected)
+        count = sum(agent.prune_counts.values())
+        if agent.prune_counts[rejected['rule']] == 1 or count % 1000 == 0:
+            status.update(prune_counts=dict(agent.prune_counts),
+                          prune_examples=agent.prune_examples)
+            save(status_path,status)
+    agent.record_prune = record_prune
+    original_translation = agent.translate_nl2sl
+    def translate_checked(*args, **kwargs):
+        status['phase'] = 'translation'
+        save(status_path,status)
+        translated = original_translation(*args, **kwargs)
+        status.update(phase='search', validated_constraint_programs=len(translated['hard_logic_py']),
+                      translation_repairs=translated.get('reflect_cnt',0),
+                      extraction_repairs=translated.get('extraction_repair_count',0),
+                      source_coverage_items=len(translated.get('source_coverage',[])),
+                      program_sources=translated.get('translation_program_sources',[]))
+        save(status_path,status)
+        return translated
+    agent.translate_nl2sl = translate_checked
+    from dataclasses import asdict
+    status['meal_order_profile'] = 'C: no window-minus30 meal shortcut; full-visit + real meal access feasibility; both DFS orders'
+    status['soft_configuration'] = asdict(agent.soft_config)
+    status['evaluation_profile'] = 'original schema/commonsense/hard evaluation'
+    save(status_path,status)
     started = time.monotonic()
     try:
         success, selected = agent.run(query,load_cache=False)
@@ -213,11 +247,13 @@ def run_case(case):
         if agent.selection.get('stop_reason')=='wall_limit_reached':
             status['state']='timed_out_with_candidates' if success else 'timed_out_no_candidates'
     except Exception as exc:
-        status.update(state='failed',error_type=type(exc).__name__,candidate_count=len(agent.pool.items),
+        status.update(state='failed',error_type=type(exc).__name__,error_message=str(exc),candidate_count=len(agent.pool.items),
                       elapsed_seconds=time.monotonic()-started)
         save(status_path,status)
         raise
     finally:
+        status.update(prune_counts=getattr(agent,'prune_counts',{}),
+                      prune_examples=getattr(agent,'prune_examples',{}))
         status['finished_at'] = datetime.now(timezone.utc).isoformat()
         save(status_path,status)
     print(f'{case}: {status["state"]}, {status["candidate_count"]}/20, eval={status["evaluation"].get("all_pass", False)}',flush=True)
