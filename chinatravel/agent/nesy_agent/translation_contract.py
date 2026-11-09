@@ -10,6 +10,23 @@ class TranslationValidationError(ValueError):
     pass
 
 
+def extraction_output_options(llm):
+    url=getattr(llm,'_client_kwargs',{}).get('base_url','')
+    if urlsplit(str(url)).hostname not in ('localhost','127.0.0.1','::1'):
+        return {}
+    evidence={'type':'array','items':{'type':'object',
+        'properties':{'constraint':{'type':'string'},'source':{'type':'string'}},
+        'required':['constraint','source'],'additionalProperties':False}}
+    strings={'type':'array','items':{'type':'string'}}
+    schema={'type':'object','properties':{
+        'hard_logic':strings,'hard_logic_evidence':evidence,
+        'soft_logic':strings,'soft_logic_evidence':evidence},
+        'required':['hard_logic','hard_logic_evidence','soft_logic','soft_logic_evidence'],
+        'additionalProperties':False}
+    return {'response_format':{'type':'json_schema','json_schema':{
+        'name':'extracted_requirements','strict':True,'schema':schema}}}
+
+
 def output_options(llm,count):
     """Use llama.cpp's schema grammar locally; keep cloud compatibility."""
     url=getattr(llm,'_client_kwargs',{}).get('base_url','')

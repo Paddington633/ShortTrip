@@ -15,6 +15,28 @@ Distinguish attraction_names/spot_type and restaurant_names/food_type: named
 places are names, not categories. Do not make vague/optional wishes such as
 "尽可能多体验当地美食" into a mandatory cuisine category named 美食.
 Preserve all explicit requirements, including specific named places and modes.
+Separate hard_logic from soft_logic before generating any checking code.
+An explicit unqualified request (budget cap, room count, named visit) is hard.
+最好/尽量/尽可能/优先/主要/如果方便 and prefer/mainly/primarily/as much as
+possible identify preferences. Preserve them in soft_logic with verbatim
+soft_logic_evidence; never put them into hard_logic. Keep complete clauses so
+modifiers and negations cannot disappear from evidence. Do not put mandatory
+requirements into soft_logic. If there are no preferences, return empty lists.
+For example, "酒店最好有管家服务" -> soft_logic ["{'管家服务'}<=hotel_feature"],
+while "酒店必须有管家服务" -> hard_logic ["{'管家服务'}<=hotel_feature"].
+"主要坐地铁" -> soft_logic ["transport_type<={'metro'}"], whereas "只能坐地铁"
+is hard. Soft expressions record preferences only and are not feasibility tests.
+Explicit room counts and bed counts are independent: "三间大床房" means
+rooms==3 and room_type==1; "住大床房" specifies room_type==1 but no room count.
+"双床房" means room_type==2. "单人房" and "双人间" describe occupancy,
+not a proven bed count; preserve explicit room counts without inventing beds.
+For example, "住一间有桑拿的酒店，双人间就行" requires rooms==1 and
+{'桑拿'}<=hotel_feature. Do NOT emit room_type==2: two occupants do not prove
+two beds. Keep the occupancy wording in the original query.
+Use numeric equality for rooms/room_type, never a set of room-name strings.
+When the local JSON schema requests only four logic/evidence arrays, emit
+exactly those arrays. City/day/people metadata already exists in the input.
+Do not invent symbolic start_city/target_city set-membership constraints.
 If extraction is rejected, correct the extraction itself, not Python code.
 '''
 
@@ -87,11 +109,19 @@ def _validate_extraction_items(query,parsed):
             if field in ('cost','hotel_price','food_price','rooms','room_type'):
                 if (not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<=0):
                     raise TranslationValidationError(f'Extraction {code}: unspecified numeric requirements must be absent, not 0')
-                cue=(r'间|rooms?\b' if field=='rooms' else r'床|beds?\b' if field=='room_type'
+                cue=(r'间|rooms?\b' if field=='rooms' else r'床|beds?\b|\btwin\b|\bking\b|\bqueen\b' if field=='room_type'
                      else r'预算|元|人民币|块|¥|￥|budget|yuan|rmb|cost|price|cny')
                 if not re.search(cue,source,re.I):
                     raise TranslationValidationError(f'Extraction {code}: quote does not explicitly request this budget/room/bed constraint')
-                bedword=field=='room_type' and ((value==1 and re.search(r'单床|大床|single|double bed',source,re.I)) or (value==2 and re.search(r'双床|twin|two beds',source,re.I)))
+                if field=='room_type':
+                    explicit_beds=set()
+                    if re.search(r'单床|大床|\b(?:single|double|king|queen)[ -]bed\b',source,re.I):
+                        explicit_beds.add(1)
+                    if re.search(r'双床|\btwin\b|\btwo beds\b',source,re.I):
+                        explicit_beds.add(2)
+                    if explicit_beds and (len(explicit_beds)!=1 or value not in explicit_beds):
+                        raise TranslationValidationError('Bed count must match the explicit bed wording, not the number of rooms')
+                bedword=field=='room_type' and ((value==1 and re.search(r'单床|大床|single|double[ -]bed|king|queen',source,re.I)) or (value==2 and re.search(r'双床|twin|two beds',source,re.I)))
                 if not bedword and not _number_present(value,source):
                     raise TranslationValidationError(f'Extraction {code}: numeric value not supported by quote {source!r}')
             if field in ('attraction_names','restaurant_names','hotel_names','spot_type','food_type','hotel_feature'):
@@ -104,6 +134,13 @@ def _validate_extraction_items(query,parsed):
                         raise TranslationValidationError(f'Extraction {code}: {item!r} is not a valid {field} in the target city; use {actual or "an exact database name/type, never an invented category"}')
                     if field.endswith('_names') and not (_norm(item) in _norm(source) or _norm(source) in _norm(item)):
                         raise TranslationValidationError(f'Extraction {code}: named place is not supported by its source quote')
+                    if field in ('spot_type','food_type','hotel_feature'):
+                        terms={item}
+                        if field=='spot_type':
+                            from .extraction_alignment import CATEGORY_ALIASES
+                            terms.update(alias for alias,canonical in CATEGORY_ALIASES.items() if canonical==item)
+                        if not any(_norm(term) in _norm(source) for term in terms):
+                            raise TranslationValidationError(f'Extraction {code}: category/feature is not supported by its source quote {source!r}')
         evidence.append(dict(constraint=code,source=source,derived=False))
     out=dict(parsed);out['hard_logic_evidence']=evidence
     return out
@@ -144,6 +181,8 @@ def compile_constraint(text):
             return f"result=True\nfor activity in allactivities(plan):\n  for leg in activity_transports(activity):\n    if leg['mode']=='taxi' and taxi_cars(activity_transports(activity))!={value!r}: result=False"
     if not isinstance(value,set) or not value or not all(isinstance(v,str) for v in value):return None
     literal='{'+', '.join(repr(v) for v in sorted(value))+'}'
+    if shape=='set' and field=='intercity_transport' and isinstance(op,ast.LtE):
+        return "modes=set()\nfor activity in allactivities(plan):\n  if activity_type(activity) in ['train','airplane']: modes.add(activity_type(activity))\nresult=("+literal+'<=modes)'
     if shape=='scalar' and field=='transport_type' and isinstance(op,(ast.LtE,ast.Eq)):
         return "modes=set()\nfor activity in allactivities(plan):\n  if activity_transports(activity): modes.add(innercity_transport_type(activity_transports(activity)))\nresult=(modes"+symbol+literal+')'
     if shape=='scalar' and field=='intercity_transport' and isinstance(op,ast.Eq):

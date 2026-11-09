@@ -55,8 +55,8 @@
     "chinatravel/agent/nesy_agent/plan_for_check_en/day4.json": "02d5823ca88d52c61982d8a6172414264960ca06394718f734d2e6942a3a554c",
     "chinatravel/agent/nesy_agent/plan_for_check_en/day5.json": "b89df33dcdd64f6c6a8ee19d00f190fe5261c946a09518b623227f19668599b9",
     "chinatravel/agent/nesy_agent/plan_for_check_en/day6.json": "0d3784a7b9aa7427afb234ec71380c23750dece41eeacadf2e9ad76a6a446b80",
-    "chinatravel/agent/nesy_agent/prompts/prompts.py": "4b03d0e73ab1a7e473ca8e715066a560859ce62bed5f43d7b7509e455abe1549",
-    "chinatravel/agent/nesy_agent/prompts/prompts_en.py": "b74235d9b9f180e48cce60e697ba9f24dc35303d56ed62ed883ff56031173009",
+    "chinatravel/agent/nesy_agent/prompts/prompts.py": "ee1c228013631068f4a5ac3b9496c1b262e80f8dcf8aa764bfda89125fd9729e",
+    "chinatravel/agent/nesy_agent/prompts/prompts_en.py": "fc03c8e098722f935c37f743e941aac767c2445bc68e0f05793c06563f1836b9",
     "chinatravel/agent/nesy_agent/prompts/__init__.py": "fe623881b0e5a9a560339c84f3a7e229de50875435051197d89738a34997a325",
     "chinatravel/agent/nesy_verifier/llm_modulo.py": "78bc9cda0f1d7ede57cea0109b156bfb4d0580902f2de286f43f6487932ea351",
     "chinatravel/agent/nesy_verifier/__init__.py": "3a2e5d33b9b21b12b96c6e94109b6c6b0a3fe5fdf4e3239677d9f2c25cca878c",
@@ -200,15 +200,18 @@
     "experiments/c_only/test_attraction_hours.py": "95e316ce2a4d51299a5c058027fee31df5d5683714b89edab4f3c53f60313d52",
     "experiments/c_only/test_coordinator.py": "be74921021782b7b438a2aae7fc66c8f718f4d215b8dda348fe08e930145b0e0",
     "experiments/c_only/test_rules.py": "3cb55245c9d8df1f7dbac20b2b5f2d6e7231c83412d912097f1feea15801568e",
-    "experiments/c_only/worker.py": "92b302ad63ce5096753479e9a80259c400e752c6484e41ca0b1e2c77a1059e73"
+    "experiments/c_only/worker.py": "92b302ad63ce5096753479e9a80259c400e752c6484e41ca0b1e2c77a1059e73",
+    "chinatravel/agent/nesy_agent/constraint_compiler.py": "23810e331b993d84d6994d7c11475255f88512efe7c075780ed2bc53aea3d60d",
+    "chinatravel/agent/nesy_agent/extraction_alignment.py": "0283e02b757de81a6692333e4613632a7335f38f7e0d4b84a7559deeeed3175c",
+    "chinatravel/agent/nesy_agent/translation_contract.py": "c8e49a7345b6be6cdc41e1eaea65747645f99c1b1b22170f781c4d2a289889d7"
   },
-  "notes": "Current production source with grounded translation, flexible C meal ordering and safe pruning. Experiment entry points and regression paths adapted for a portable checkout. Published hashes refer to payload bytes; this manifest excludes its own hash.",
+  "notes": "Current production source with grounded hard/soft translation, clause-aware evidence validation, local extraction schemas, flexible C meal ordering and safe pruning. Regression paths are portable. Published hashes refer to payload bytes; this manifest excludes its own hash.",
   "publication_date": "2026-11-09",
   "published_sha256": {
-    "chinatravel/agent/nesy_agent/constraint_compiler.py": "ea133e8676c72f575158eea00c60edb863c891b2d98a16889716ff81fcc3be31",
-    "chinatravel/agent/nesy_agent/extraction_alignment.py": "ed4dfdd7bb4c35c626d69c9e871aa7482ee9f54a11f942e4c904bf0437fb0c8e",
+    "chinatravel/agent/nesy_agent/constraint_compiler.py": "23810e331b993d84d6994d7c11475255f88512efe7c075780ed2bc53aea3d60d",
+    "chinatravel/agent/nesy_agent/extraction_alignment.py": "5400f47b9e1d64c65c2172f763bb5f949389d553d71933ae9ccabf65f4553d37",
     "chinatravel/agent/nesy_agent/pruning.py": "f2dee1e2b1355bdf6ecceb6f2c8ee08cecbb63f6cf930b750b9e057f80b6d009",
-    "chinatravel/agent/nesy_agent/translation_contract.py": "5a32485a5b82de488909a1008220c84df5f99b9ad065a1cdca0fd210c6813a03",
+    "chinatravel/agent/nesy_agent/translation_contract.py": "c8e49a7345b6be6cdc41e1eaea65747645f99c1b1b22170f781c4d2a289889d7",
     "docs/flexible-meals.md": "4d0f8f7fab6ee8aa347804f4584ed8a263112fdbec00d1793a6bfa9ef98841d7",
     "docs/pruning.md": "19ff60bec4438eca4085217e7fb40097e818913ea909a81c93504a40eb5b2aee",
     "docs/translation-alignment.md": "a805671f403e4298acea3ebf245ee20a533e714a6e0982e058c2efa32dbdf8d0",
@@ -228,7 +231,7 @@
     "README.upstream.zh-CN.md": "8b41ad9af6b4a5f2b35bde0fa4dcf61ffb2d4bceab368431ee6454999163535f",
     "README.zh-CN.md": "8844278962e7a1d4dfd774d3e5c0c7c2514a99997bd108244a49560872a8e9a6",
     "TPC@AIC2025/readme.md": "f2ca196798dea91b0fd84b68bf08e967e9fd98bdf9820d6e812a9a86e09e35d5",
-    "VERIFICATION.md": "af3e9f62fcfd7c3177a14372905c6fa4cd5807b4aa5ad2698f192281b8a0dcdc",
+    "VERIFICATION.md": "a1427daadcaace05e04668d2d89f50f1deda829184e1c85608093c0fd769085a",
     "agent_env/README.md": "d4f5423a25577af4056a9c8389d757cd89cf834334bcca1499d69f6d7cc382d9",
     "agent_env/README.zh-CN.md": "3d454c19a2ed8d308e6b9f80dbd4582236f876fcb05b41dea5dd87964723d80f",
     "agent_env/SKILL.md": "ef176f74b42c30c2090d7c6c515669ca032edb810e98d5dd5235115bf7af0e9d",
@@ -270,8 +273,8 @@
     "chinatravel/agent/nesy_agent/plan_for_check_en/day5.json": "b89df33dcdd64f6c6a8ee19d00f190fe5261c946a09518b623227f19668599b9",
     "chinatravel/agent/nesy_agent/plan_for_check_en/day6.json": "0d3784a7b9aa7427afb234ec71380c23750dece41eeacadf2e9ad76a6a446b80",
     "chinatravel/agent/nesy_agent/prompts/__init__.py": "6877c5ec93e3a5c101264343a359ce020be4d3fa4925aea89a81d2e646e46b6d",
-    "chinatravel/agent/nesy_agent/prompts/prompts.py": "9e449a29477823f925dd01617dba3303b8b665c640b87120baf835b66497d257",
-    "chinatravel/agent/nesy_agent/prompts/prompts_en.py": "ab5fa317b34ede8e2a6c470f89d672e877648a2cd8e3b23fce7c9d5ebc3d90b8",
+    "chinatravel/agent/nesy_agent/prompts/prompts.py": "dc937c19969addae8bf701c4f021bb73744307e9febaa01fdc818341cf052483",
+    "chinatravel/agent/nesy_agent/prompts/prompts_en.py": "3c42d068697481c122d6cf35ea56f13ac12f01b2485fdc40ee5273f28eb01e84",
     "chinatravel/agent/nesy_agent/rule_driven_rec.py": "a8a7dfdb7454529f4201e4ee8103423c915073b0bd09701176dab8306c9902b9",
     "chinatravel/agent/nesy_agent/utils.py": "42688d808c15100bfbd8369285c8202457024a53218cc870333470e05b9c4cef",
     "chinatravel/agent/nesy_verifier/__init__.py": "3a2e5d33b9b21b12b96c6e94109b6c6b0a3fe5fdf4e3239677d9f2c25cca878c",
@@ -423,6 +426,7 @@
     "tests/test_soft_constraints.py": "9bc9e01d5f8cdeb8ef8ee45e4ae462ae198ab800ad606a7c1b3e22f86ab64a57",
     "tests/test_synthetic_query_constraints.py": "3319f299ea83e0cf91c03685fb738bcd53b07b8a79904a3950f0b10b4e521f58",
     "tests/test_translation_dsl.py": "da7515e61a5ae67e157ac1b0e209b39208c6275f7acbf57c0182ab5613c2017c",
-    "translation_api_config.example.json": "c29f22904fd43df46b8f43fcd62070686bba0f30329b65285027550886c811de"
+    "translation_api_config.example.json": "c29f22904fd43df46b8f43fcd62070686bba0f30329b65285027550886c811de",
+    "tests/test_translation_modality.py": "f97c98d92435942d702a30c710437db98d7c5b6ff388858229f8dc1b2de4ea3e"
   }
 }

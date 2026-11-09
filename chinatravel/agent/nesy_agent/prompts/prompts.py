@@ -253,6 +253,16 @@ SELECT_POI_TIME_INSTRUCTION = """
 
 nl2sl_prompt = """
 You need to extract start_city, target_city, days, people_number from the nature language query and transform the nature language query to hard_logic.
+Classify every requirement before extraction. Put mandatory requirements in hard_logic.
+Put preferences (最好, 尽量, 尽可能, 优先, 主要, prefer, mainly, primarily,
+as much as possible) in soft_logic, with separate soft_logic_evidence.
+Evidence must quote the complete relevant clause, including modifiers and negations.
+Return hard_logic_evidence and soft_logic_evidence as lists of objects with
+constraint and source. Never harden a preference or weaken a mandatory limit.
+Explicit room counts and bed counts must both be retained. A king/double bed
+or 大床房 has one bed (room_type==1), twin/双床房 has two (room_type==2).
+Occupancy labels 单人房/双人间 alone do not establish bed count.
+Only hard_logic is compiled into feasibility checking programs.
 There are 16 hard_logic(vavarname)
 (1) days: must be equal to the number of days user wants to travel.
 "days==n" means the user wants to travel n days.
@@ -291,7 +301,7 @@ Your response must be in legal json format. Pay attention to the format of the h
 (18) activity_start_time: the start time of the activity.
 (19) activity_end_time: the end time of the activity.
 (20) activity_time: the duration of the activity.
-If only one day in the trip, you should ignore rooms and room_type. As well as other constraints if they are not needed.
+Do not infer rooms or beds for any trip length. Preserve explicitly requested room counts and bed types.
 If you find some constraints are not in those mentioned above, you can add them to the hard_logic.
 """
 
@@ -306,12 +316,12 @@ nature_language: 当前位置上海。我们三个人打算去北京玩两天，
 Answer: {'start_city': "上海", 'target_city': "北京", 'days': 2, 'people_number': 3, 'hard_logic': ['days==2', 'people_number==3', 'cost<=6000', "{'北京全聚德(前门店)'} <= restaurant_names", 'tickets==3', 'rooms==2', 'taxi_cars==1','room_type==2']}
 """
 nl2sl_example_3 = """
-nature_language: 当前位置重庆。我一个人想去杭州玩2天，坐高铁（G），预算3000人民币，喜欢自然风光，住一间单床且有智能客控的酒店，人均每顿饭不超过100元，尽可能坐地铁，请给我一个旅行规划。
-Answer: {'start_city': '成都', 'target_city': '杭州', 'days': 2, 'people_number': 1, 'hard_logic': ['days==2', 'people_number==1', 'cost<=3000', 'tickets==1', 'rooms==1', 'room_type==1', "intercity_transport=={'train'}", "{'自然风光'}<=spot_type", "{'智能客控'}<=hotel_feature", 'food_price<=100', "transport_type<={'metro'}" ]}
+nature_language: 当前位置重庆。我一个人想去杭州玩2天，坐高铁（G），预算3000人民币，想去自然风光景点，住一间单床且有智能客控的酒店，人均每顿饭不超过100元，尽可能坐地铁，请给我一个旅行规划。
+Answer: {'start_city': '重庆', 'target_city': '杭州', 'days': 2, 'people_number': 1, 'hard_logic': ['days==2', 'people_number==1', 'cost<=3000', 'tickets==1', 'rooms==1', 'room_type==1', "intercity_transport=={'train'}", "{'自然风光'}<=spot_type", "{'智能客控'}<=hotel_feature", 'food_price<=100', "train_type=={'G'}"], 'soft_logic': ["transport_type<={'metro'}"], 'soft_logic_evidence': [{'constraint': "transport_type<={'metro'}", 'source': '尽可能坐地铁'}]}
 """
 nl2sl_example_4 = """
 nature_language: 当前位置苏州。我和我的朋友想去北京玩3天，预算8000人民币，坐火车去，想吃北京菜，想去故宫博物院看看，住的酒店最好有管家服务。
-Answer: {'start_city': '上海', 'target_city': '北京', 'days': 3, 'people_number': 2, 'hard_logic': ['days==3', 'people_number==2', 'cost<=8000', 'tickets==2', , 'taxi_cars==1', "intercity_transport=={'train'}", "{'北京菜'}<=food_type", "{'故宫博物院'}<=attraction_names", "{'管家服务'}<=hotel_feature"]}
+Answer: {'start_city': '苏州', 'target_city': '北京', 'days': 3, 'people_number': 2, 'hard_logic': ['days==3', 'people_number==2', 'cost<=8000', 'tickets==2', 'taxi_cars==1', "intercity_transport=={'train'}", "{'北京菜'}<=food_type", "{'故宫博物院'}<=attraction_names"], 'soft_logic': ["{'管家服务'}<=hotel_feature"], 'soft_logic_evidence': [{'constraint': "{'管家服务'}<=hotel_feature", 'source': '住的酒店最好有管家服务'}]}
 """
 
 nl2sl_example_5 = """
